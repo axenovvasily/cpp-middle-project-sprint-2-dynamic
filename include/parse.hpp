@@ -14,6 +14,74 @@
 
 namespace stdx::details {
 
+// Преобразование захваченного фрагмента в конкретный тип. Спецификатор формата здесь не учитывается:
+// его проверяет parse_value_with_format.
+
+template <std::integral T>
+constexpr std::expected<T, scan_error> parse_integral(std::string_view input) {
+    if (input.empty()) {
+        return std::unexpected(scan_error{"Empty numeric value"});
+    }
+
+    const char *first = input.data();
+    const char *const last = input.data() + input.size();
+    // scanf принимает ведущий '+', а std::from_chars для целых — нет.
+    if (*first == '+') {
+        ++first;
+        if (first == last) {
+            return std::unexpected(scan_error{"Invalid numeric value"});
+        }
+    }
+
+    T value{};
+    const auto parsed = std::from_chars(first, last, value);
+    if (parsed.ec == std::errc::result_out_of_range) {
+        return std::unexpected(scan_error{"Numeric value is out of range"});
+    }
+    if (parsed.ec != std::errc{} || parsed.ptr != last) {
+        return std::unexpected(scan_error{"Invalid numeric value"});
+    }
+    return value;
+}
+
+template <signed_scan_type T>
+    requires std::same_as<T, std::remove_cv_t<T>>
+constexpr std::expected<T, scan_error> parse_value(std::string_view input) {
+    return parse_integral<T>(input);
+}
+
+template <unsigned_scan_type T>
+    requires std::same_as<T, std::remove_cv_t<T>>
+constexpr std::expected<T, scan_error> parse_value(std::string_view input) {
+    return parse_integral<T>(input);
+}
+
+template <floating_scan_type T>
+    requires std::same_as<T, std::remove_cv_t<T>>
+constexpr std::expected<T, scan_error> parse_value(std::string_view input) {
+    if (input.empty()) {
+        return std::unexpected(scan_error{"Empty numeric value"});
+    }
+
+    T value{};
+    const char *const first = input.data();
+    const char *const last = input.data() + input.size();
+    const auto parsed = std::from_chars(first, last, value, std::chars_format::general);
+    if (parsed.ec == std::errc::result_out_of_range) {
+        return std::unexpected(scan_error{"Numeric value is out of range"});
+    }
+    if (parsed.ec != std::errc{} || parsed.ptr != last) {
+        return std::unexpected(scan_error{"Invalid numeric value"});
+    }
+    return value;
+}
+
+template <string_scan_type T>
+    requires std::same_as<T, std::remove_cv_t<T>>
+constexpr std::expected<T, scan_error> parse_value(std::string_view input) {
+    return T{input};
+}
+
 // Функция для парсинга значения с учетом спецификатора формата
 template <typename T>
 constexpr std::expected<T, scan_error> parse_value_with_format(std::string_view input, std::string_view fmt) {
@@ -36,45 +104,7 @@ constexpr std::expected<T, scan_error> parse_value_with_format(std::string_view 
             }
         }
 
-        if constexpr (signed_scan_type<T> || unsigned_scan_type<T>) {
-            if (input.empty()) {
-                return std::unexpected(scan_error{"Empty numeric value"});
-            }
-            const char *first = input.data();
-            const char *const last = input.data() + input.size();
-            if (*first == '+') {
-                ++first;
-                if (first == last) {
-                    return std::unexpected(scan_error{"Invalid numeric value"});
-                }
-            }
-            T value{};
-            const auto parsed = std::from_chars(first, last, value);
-            if (parsed.ec == std::errc::result_out_of_range) {
-                return std::unexpected(scan_error{"Numeric value is out of range"});
-            }
-            if (parsed.ec != std::errc{} || parsed.ptr != last) {
-                return std::unexpected(scan_error{"Invalid numeric value"});
-            }
-            return value;
-        } else if constexpr (floating_scan_type<T>) {
-            if (input.empty()) {
-                return std::unexpected(scan_error{"Empty numeric value"});
-            }
-            T value{};
-            const char *const first = input.data();
-            const char *const last = input.data() + input.size();
-            const auto parsed = std::from_chars(first, last, value, std::chars_format::general);
-            if (parsed.ec == std::errc::result_out_of_range) {
-                return std::unexpected(scan_error{"Numeric value is out of range"});
-            }
-            if (parsed.ec != std::errc{} || parsed.ptr != last) {
-                return std::unexpected(scan_error{"Invalid numeric value"});
-            }
-            return value;
-        } else {
-            return T{input};
-        }
+        return parse_value<T>(input);
     }
 }
 
