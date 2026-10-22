@@ -109,8 +109,29 @@ constexpr std::expected<T, scan_error> parse_value_with_format(std::string_view 
 }
 
 // Функция для проверки корректности входных данных и выделения из обеих строк интересующих данных для парсинга
+constexpr std::expected<void, scan_error> check_format_braces(std::string_view format) {
+    bool inside_placeholder = false;
+    for (const char symbol : format) {
+        if (symbol == '{') {
+            if (inside_placeholder) {
+                return std::unexpected(scan_error{"Nested '{' in format string"});
+            }
+            inside_placeholder = true;
+        } else if (symbol == '}') {
+            if (!inside_placeholder) {
+                return std::unexpected(scan_error{"Unmatched '}' in format string"});
+            }
+            inside_placeholder = false;
+        }
+    }
+    if (inside_placeholder) {
+        return std::unexpected(scan_error{"Unclosed '{' in format string"});
+    }
+    return {};
+}
+
 template <typename... Ts>
-std::expected<std::pair<std::vector<std::string_view>, std::vector<std::string_view>>, scan_error>
+constexpr std::expected<std::pair<std::vector<std::string_view>, std::vector<std::string_view>>, scan_error>
 parse_sources(std::string_view input, std::string_view format) {
     std::vector<std::string_view> format_parts;  // Части формата между {}
     std::vector<std::string_view> input_parts;
@@ -154,6 +175,9 @@ parse_sources(std::string_view input, std::string_view format) {
         }
         input_parts.emplace_back(input.substr(0, pos));
         input = input.substr(pos + remaining_format.size());
+        if (!input.empty()) {
+            return std::unexpected(scan_error{"Unformatted text in input and format string are different"});
+        }
     } else {
         input_parts.emplace_back(input);
     }
