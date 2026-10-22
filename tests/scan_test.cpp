@@ -1,9 +1,12 @@
 #include <gtest/gtest.h>
-#include <print>
+
+#include <string>
+#include <tuple>
 
 #include "scan.hpp"
 
 TEST(ScanTest, SimpleTest) {
     auto result = stdx::scan<std::string>("number", "{}");
-    ASSERT_FALSE(result);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(std::get<0>(result->values()), "number");
 }
