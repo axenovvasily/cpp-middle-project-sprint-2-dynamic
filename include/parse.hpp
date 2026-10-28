@@ -1,8 +1,12 @@
 #pragma once
 
+#include <charconv>
+#include <concepts>
 #include <expected>
 #include <string>
 #include <string_view>
+#include <system_error>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -10,17 +14,124 @@
 
 namespace stdx::details {
 
-// здесь ваш код
+// Преобразование захваченного фрагмента в конкретный тип. Спецификатор формата здесь не учитывается:
+// его проверяет parse_value_with_format.
+
+template <std::integral T>
+constexpr std::expected<T, scan_error> parse_integral(std::string_view input) {
+    if (input.empty()) {
+        return std::unexpected(scan_error{"Empty numeric value"});
+    }
+
+    const char *first = input.data();
+    const char *const last = input.data() + input.size();
+    // scanf принимает ведущий '+', а std::from_chars для целых — нет.
+    if (*first == '+') {
+        ++first;
+        if (first == last) {
+            return std::unexpected(scan_error{"Invalid numeric value"});
+        }
+    }
+
+    T value{};
+    const auto parsed = std::from_chars(first, last, value);
+    if (parsed.ec == std::errc::result_out_of_range) {
+        return std::unexpected(scan_error{"Numeric value is out of range"});
+    }
+    if (parsed.ec != std::errc{} || parsed.ptr != last) {
+        return std::unexpected(scan_error{"Invalid numeric value"});
+    }
+    return value;
+}
+
+template <signed_scan_type T>
+    requires std::same_as<T, std::remove_cv_t<T>>
+constexpr std::expected<T, scan_error> parse_value(std::string_view input) {
+    return parse_integral<T>(input);
+}
+
+template <unsigned_scan_type T>
+    requires std::same_as<T, std::remove_cv_t<T>>
+constexpr std::expected<T, scan_error> parse_value(std::string_view input) {
+    return parse_integral<T>(input);
+}
+
+template <floating_scan_type T>
+    requires std::same_as<T, std::remove_cv_t<T>>
+constexpr std::expected<T, scan_error> parse_value(std::string_view input) {
+    if (input.empty()) {
+        return std::unexpected(scan_error{"Empty numeric value"});
+    }
+
+    T value{};
+    const char *const first = input.data();
+    const char *const last = input.data() + input.size();
+    const auto parsed = std::from_chars(first, last, value, std::chars_format::general);
+    if (parsed.ec == std::errc::result_out_of_range) {
+        return std::unexpected(scan_error{"Numeric value is out of range"});
+    }
+    if (parsed.ec != std::errc{} || parsed.ptr != last) {
+        return std::unexpected(scan_error{"Invalid numeric value"});
+    }
+    return value;
+}
+
+template <string_scan_type T>
+    requires std::same_as<T, std::remove_cv_t<T>>
+constexpr std::expected<T, scan_error> parse_value(std::string_view input) {
+    return T{input};
+}
 
 // Функция для парсинга значения с учетом спецификатора формата
 template <typename T>
-std::expected<T, scan_error> parse_value_with_format(std::string_view input, std::string_view fmt) {
-    // здесь ваш код
+constexpr std::expected<T, scan_error> parse_value_with_format(std::string_view input, std::string_view fmt) {
+    if constexpr (!scannable_type<T> || !std::same_as<T, std::remove_cv_t<T>>) {
+        return std::unexpected(scan_error{"Unsupported type"});
+    } else {
+        if (!fmt.empty()) {
+            if (fmt.size() != 2 || fmt.front() != '%') {
+                return std::unexpected(scan_error{"Invalid conversion specifier"});
+            }
+            const char spec = fmt.back();
+            const bool known = spec == 'd' || spec == 'u' || spec == 'f' || spec == 's';
+            const bool matches = (spec == 'd' && signed_scan_type<T>) || (spec == 'u' && unsigned_scan_type<T>) ||
+                                 (spec == 'f' && floating_scan_type<T>) || (spec == 's' && string_scan_type<T>);
+            if (!known) {
+                return std::unexpected(scan_error{"Invalid conversion specifier"});
+            }
+            if (!matches) {
+                return std::unexpected(scan_error{"Conversion specifier does not match the target type"});
+            }
+        }
+
+        return parse_value<T>(input);
+    }
 }
 
 // Функция для проверки корректности входных данных и выделения из обеих строк интересующих данных для парсинга
+constexpr std::expected<void, scan_error> check_format_braces(std::string_view format) {
+    bool inside_placeholder = false;
+    for (const char symbol : format) {
+        if (symbol == '{') {
+            if (inside_placeholder) {
+                return std::unexpected(scan_error{"Nested '{' in format string"});
+            }
+            inside_placeholder = true;
+        } else if (symbol == '}') {
+            if (!inside_placeholder) {
+                return std::unexpected(scan_error{"Unmatched '}' in format string"});
+            }
+            inside_placeholder = false;
+        }
+    }
+    if (inside_placeholder) {
+        return std::unexpected(scan_error{"Unclosed '{' in format string"});
+    }
+    return {};
+}
+
 template <typename... Ts>
-std::expected<std::pair<std::vector<std::string_view>, std::vector<std::string_view>>, scan_error>
+constexpr std::expected<std::pair<std::vector<std::string_view>, std::vector<std::string_view>>, scan_error>
 parse_sources(std::string_view input, std::string_view format) {
     std::vector<std::string_view> format_parts;  // Части формата между {}
     std::vector<std::string_view> input_parts;
@@ -64,10 +175,13 @@ parse_sources(std::string_view input, std::string_view format) {
         }
         input_parts.emplace_back(input.substr(0, pos));
         input = input.substr(pos + remaining_format.size());
+        if (!input.empty()) {
+            return std::unexpected(scan_error{"Unformatted text in input and format string are different"});
+        }
     } else {
         input_parts.emplace_back(input);
     }
     return std::pair{format_parts, input_parts};
 }
 
-} // namespace stdx::details
+}  // namespace stdx::details
